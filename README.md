@@ -122,4 +122,10 @@ npm test
 
 ## 许可证
 
-[MIT](LICENSE)
+本项目采用 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)，**仅允许非商业用途**：
+
+- 允许：个人学习、研究、试验、业余项目，以及慈善机构、教育机构、公共研究机构、政府机构等非商业组织使用、修改和分发
+- 禁止：任何商业用途（包括但不限于商业产品销售、商业服务/ SaaS 提供、企业内部商业运营）
+- 分发或修改后分发时，需附带本许可证与 `Required Notice` 声明
+
+商业授权请联系仓库维护者。完整条款见 [LICENSE](LICENSE)。
