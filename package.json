@@ -1,0 +1,23 @@
+{
+  "name": "job-jd-assistant",
+  "version": "1.7.0",
+  "private": true,
+  "type": "module",
+  "description": "BOSS / 智联 / 厦门人才网 / 猎聘岗位信息提取扩展",
+  "license": "MIT",
+  "keywords": [
+    "chrome-extension",
+    "manifest-v3",
+    "boss-zhipin",
+    "zhaopin",
+    "job-description",
+    "deepseek"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.js"
+  }
+}

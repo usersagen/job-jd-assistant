@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>岗位助手 · 设置</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 32px 20px 48px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+        font-size: 14px; color: #1f2328; background: #f6f7f8;
+      }
+      .card {
+        max-width: 640px; margin: 0 auto; padding: 24px 24px 20px;
+        background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, .05);
+      }
+      h1 { margin: 0 0 4px; font-size: 18px; }
+      .tip { margin: 0 0 20px; color: #6b7280; font-size: 13px; line-height: 1.6; }
+      label { display: block; margin: 16px 0 6px; font-weight: 600; font-size: 13px; }
+      input, select, textarea {
+        width: 100%; padding: 8px 10px; font: inherit;
+        border: 1px solid #d7dadd; border-radius: 6px; outline: none; background: #fff;
+      }
+      input:focus, select:focus, textarea:focus { border-color: #00a6a7; }
+      textarea { min-height: 180px; resize: vertical; line-height: 1.6; }
+      textarea.short { min-height: 110px; }
+      .hint { margin: 6px 0 0; color: #9aa0a6; font-size: 12px; }
+      .check {
+        display: flex; align-items: center; gap: 8px;
+        margin: 16px 0 0; font-weight: 500; font-size: 13px; cursor: pointer;
+      }
+      .check input { width: auto; margin: 0; }
+      .bar { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
+      button {
+        height: 34px; padding: 0 20px; border: none; border-radius: 6px;
+        background: #00a6a7; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+      }
+      button:hover { opacity: .9; }
+      #status { color: #059669; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>AI 对话设置</h1>
+      <p class="tip">
+        岗位页面右下角面板的「AI 对话」会使用以下配置。密钥只保存在本机浏览器存储中，请求仅发往 DeepSeek 与企查查。
+      </p>
+
+      <label for="key">DeepSeek API Key</label>
+      <input id="key" type="password" placeholder="sk-..." autocomplete="off" />
+      <p class="hint">在 platform.deepseek.com 创建，格式形如 sk-xxxxxxxx。</p>
+
+      <label for="qcc">企查查 API Key（可选）</label>
+      <input id="qcc" type="password" placeholder="Bearer xxx 或纯 token" autocomplete="off" />
+      <p class="hint">用于查询企业年报（从业人数、参保人数）。留空则不启用该工具。</p>
+
+      <label for="base">Base URL</label>
+      <input id="base" type="url" placeholder="https://api.deepseek.com/v1" autocomplete="off" />
+      <p class="hint">默认 https://api.deepseek.com/v1，实际请求其下的 /chat/completions。仅支持 https。</p>
+
+      <label class="check" for="allowCustom">
+        <input id="allowCustom" type="checkbox" />
+        <span>允许自定义 API 域名（会把 API Key 发送到该域名，请确认可信）</span>
+      </label>
+      <p class="hint">默认只允许 api.deepseek.com。使用第三方网关时需勾选此项，否则请求会被拦截。</p>
+
+      <label for="model">模型</label>
+      <input id="model" type="text" placeholder="deepseek-flash" autocomplete="off" />
+      <p class="hint">填接口的模型 ID，如 deepseek-flash；DeepSeek 官方接口常用 deepseek-chat / deepseek-reasoner。填成 LangChain 写法 deepseek:deepseek-flash 也会自动去掉前缀。</p>
+
+      <label class="check" for="thinking">
+        <input id="thinking" type="checkbox" checked />
+        <span>开启思考模式（默认开启，回答前先推理）</span>
+      </label>
+
+      <label for="prompt">自定义提示词</label>
+      <textarea id="prompt" class="short" placeholder="例如：你是一名互联网大厂技术面试官，回答时先指出简历与岗位的 3 个差距，再给出改法，用表格呈现。"></textarea>
+      <p class="hint">填写后会替换默认的「回答要求」，岗位信息与简历仍会自动附到提示词里；留空使用默认要求。最多 2000 字。</p>
+
+      <label for="resume">我的简历（纯文本）</label>
+      <textarea id="resume" placeholder="粘贴简历文本，用于匹配度分析和改写建议。留空则只基于岗位内容回答。"></textarea>
+      <p class="hint">建议控制在 4000 字以内，超出部分不会发送给模型。</p>
+
+      <div class="bar">
+        <button id="save" type="button">保存</button>
+        <span id="status"></span>
+      </div>
+    </div>
+    <script src="options.js"></script>
+  </body>
+</html>

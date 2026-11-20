@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "BOSS / 智联 / 厦门人才网 / 猎聘岗位信息提取",
+  "version": "1.7.0",
+  "description": "在 BOSS 直聘、智联招聘、厦门人才网和猎聘的职位详情页一键提取公司名称、职位名称、薪资与职位描述，复制为 Markdown 或 JSON，并可结合简历与岗位进行 AI 对话分析（可调用企查查查询企业年报）。",
+  "permissions": ["clipboardWrite", "storage"],
+  "host_permissions": ["https://api.deepseek.com/*", "https://agent.qcc.com/*"],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "options_page": "dist/options.html",
+  "action": {
+    "default_title": "提取当前岗位信息"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+S",
+        "mac": "Alt+Shift+S"
+      },
+      "description": "提取当前岗位信息"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.zhipin.com/job_detail/*", "*://*.zhipin.com/web/geek/jobs*", "*://*.zhipin.com/gongsi/job/*"],
+      "js": ["dist/page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://*.zhipin.com/job_detail/*", "*://*.zhipin.com/web/geek/jobs*", "*://*.zhipin.com/gongsi/job/*", "*://xiaoyuan.zhaopin.com/job/*", "*://*.zhaopin.com/jobdetail/*", "*://*.xmrc.com.cn/Recruit/RecruitInfo/*", "*://*.liepin.com/job/*", "*://*.liepin.com/lptjob/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

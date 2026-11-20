@@ -1,0 +1,267 @@
+// 面板 UI：DOM 构建、挂载、提取入口与复制操作。
+import { runtime } from '../state.js';
+import { HOST_ID, MSG } from '../../shared/protocol.js';
+import { copyText } from '../../shared/clipboard.js';
+import { toMarkdown } from '../../shared/markdown.js';
+import { extractWithRetry } from '../extract.js';
+import { CSS } from './styles.js';
+import {
+  buildChatView,
+  switchView,
+  sendChat,
+  stopChat,
+  queryCompany,
+  newChat
+} from './chat.js';
+import { buildHistoryView, renderHistory } from './history.js';
+
+// 进入「历史会话 / 岗位信息」视图后，按钮换成返回对话的消息图标
+const BACK_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">'
+  + '<path d="M15.75,3 C19.7140238,3 22.9350055,6.18134145 22.9990287,10.130108 L23,10.25 L23,10.5 C23,14.4640238 19.8186586,17.6850055 15.869892,17.7490287 L15.75,17.75 L13.8105,17.75 L9.78033009,21.7803301 C9.4991526,22.0615076 9.05026186,22.0727547 8.75566731,21.8140714 L8.71966991,21.7803301 C8.43849242,21.4991526 8.42724532,21.0502619 8.68592862,20.7556673 L8.71966991,20.7196699 L12.9696699,16.4696699 C13.0986012,16.3407387 13.2696414,16.2635976 13.4504659,16.2516361 L13.5,16.25 L15.75,16.25 C18.8938809,16.25 21.4484526,13.7268671 21.4992297,10.5950868 L21.5,10.5 L21.5,10.25 C21.5,7.10611906 18.9768671,4.55154738 15.8450868,4.50077034 L15.75,4.5 L8.25,4.5 C5.10611906,4.5 2.55154738,7.02313287 2.50077034,10.1549132 L2.5,10.25 L2.5,10.5 C2.5,13.6438809 5.02313287,16.1984526 8.15491324,16.2492297 L8.25,16.25 L9.25,16.25 C9.66421356,16.25 10,16.5857864 10,17 C10,17.3994202 9.68777001,17.7259152 9.2940682,17.7487268 L9.25,17.75 L8.25,17.75 C4.28597621,17.75 1.06499452,14.5686586 1.00097129,10.619892 L1,10.5 L1,10.25 C1,6.28597621 4.18134145,3.06499452 8.13010799,3.00097129 L8.25,3 L15.75,3 Z"></path>'
+  + '</svg>';
+
+function addRow(container, label, value) {
+  if (!value) return;
+  const row = document.createElement('div');
+  row.className = 'row';
+  const name = document.createElement('b');
+  name.textContent = label;
+  const content = document.createElement('span');
+  content.textContent = value;
+  row.append(name, content);
+  container.appendChild(row);
+}
+
+function renderPanel(data) {
+  const body = runtime.ui.body;
+  body.textContent = '';
+
+  addRow(body, '公司', data.company);
+  addRow(body, '规模', data.companyScale);
+  addRow(body, '薪资', data.salary);
+  addRow(body, '城市', data.city);
+  addRow(body, '经验', data.experience);
+  addRow(body, '学历', data.degree);
+  addRow(body, 'HR', data.hr);
+  addRow(body, '地址', data.address);
+
+  if (data.tags.length) {
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    data.tags.forEach((tag) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = tag;
+      chips.appendChild(chip);
+    });
+    body.appendChild(chips);
+  }
+
+  const desc = document.createElement('div');
+  desc.className = 'desc';
+  desc.textContent = data.description || '（未提取到职位描述，可刷新页面后重试）';
+  body.appendChild(desc);
+
+  const missing = [];
+  if (!data.title) missing.push('职位名称');
+  if (!data.company) missing.push('公司名称');
+  if (!data.description) missing.push('职位描述');
+  if (missing.length) {
+    const warn = document.createElement('div');
+    warn.className = 'warn';
+    warn.textContent = `未提取到：${missing.join('、')}。页面可能未加载完成，或站点结构已改版。`;
+    body.appendChild(warn);
+  }
+
+  runtime.ui.title.textContent = data.title || '未识别到职位名称';
+  runtime.ui.panel.hidden = false;
+}
+
+async function copyCurrent(kind) {
+  if (!runtime.lastData) return;
+  const btn = kind === 'json' ? runtime.ui.btnJson : runtime.ui.btnMd;
+  const text = kind === 'json' ? JSON.stringify(runtime.lastData, null, 2) : toMarkdown(runtime.lastData);
+  const ok = await copyText(text);
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.textContent = ok ? '已复制' : '复制失败';
+  clearTimeout(Number(btn.dataset.timer) || 0);
+  btn.dataset.timer = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1200);
+}
+
+export async function onExtract(options = {}) {
+  if (runtime.extracting) return;
+  runtime.extracting = true;
+  runtime.ui.trigger.disabled = true;
+  runtime.ui.trigger.textContent = '提取中…';
+  try {
+    runtime.lastData = await extractWithRetry();
+    renderPanel(runtime.lastData);
+    switchView('chat');
+    if (options.copyJson) await copyCurrent('json');
+  } catch (err) {
+    runtime.lastData = null;
+    runtime.ui.panel.hidden = false;
+    runtime.ui.body.textContent = '';
+    addRow(runtime.ui.body, '错误', '提取失败，页面结构可能已改版，请刷新后重试。');
+    console.warn('[岗位提取] 失败：', err);
+  } finally {
+    runtime.extracting = false;
+    runtime.ui.trigger.disabled = false;
+    runtime.ui.trigger.textContent = 'AI 岗位助手';
+  }
+}
+
+function buildUI() {
+  const wrap = document.createElement('div');
+  wrap.className = 'wrap';
+
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.hidden = true;
+
+  const head = document.createElement('div');
+  head.className = 'head';
+  const title = document.createElement('h2');
+  title.textContent = '岗位信息';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'close';
+  closeBtn.type = 'button';
+  closeBtn.title = '关闭';
+  closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">'
+    + '<path d="M5.63603897,19.7781746 C5.24551468,20.1686989 4.6123497,20.1686989 4.2218254,19.7781746 C3.83130111,19.3876503 3.83130111,18.7544853 4.2218254,18.363961 L10.5857864,12 L4.2218254,5.63603897 C3.83130111,5.24551468 3.83130111,4.6123497 4.2218254,4.22182541 C4.61234969,3.83130112 5.24551467,3.83130112 5.63603896,4.22182541 L12,10.5857864 L18.363961,4.22182541 C18.7544853,3.83130112 19.3876503,3.83130112 19.7781746,4.22182541 C20.1686989,4.6123497 20.1686989,5.24551468 19.7781746,5.63603897 L5.63603897,19.7781746 Z M19.7781746,18.363961 C20.1686989,18.7544853 20.1686989,19.3876503 19.7781746,19.7781746 C19.3876503,20.1686989 18.7544853,20.1686989 18.363961,19.7781746 L12.7071068,14.1213203 L14.1213203,12.7071068 L19.7781746,18.363961 Z"></path>'
+    + '</svg>';
+  const newChatBtn = document.createElement('button');
+  newChatBtn.className = 'gear';
+  newChatBtn.type = 'button';
+  newChatBtn.title = '新建对话';
+  newChatBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">'
+    + '<path d="M12,2 C12.5522847,2 13,2.44771525 13,3 L13,21 C13,21.5522847 12.5522847,22 12,22 C11.4477153,22 11,21.5522847 11,21 L11,13 L3,13 C2.44771525,13 2,12.5522847 2,12 C2,11.4477153 2.44771525,11 3,11 L11,11 L11,3 C11,2.44771525 11.4477153,2 12,2 Z M21,11 C21.5522847,11 22,11.4477153 22,12 C22,12.5522847 21.5522847,13 21,13 L13.999,13 L13.999,11 L21,11 Z"></path>'
+    + '</svg>';
+  const historyBtn = document.createElement('button');
+  historyBtn.className = 'gear';
+  historyBtn.type = 'button';
+  historyBtn.title = '历史会话';
+  historyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">'
+    + '<path d="M11.7813297,16.4440304 C12.2586045,16.7563662 12.8199547,16.952723 13.4246824,16.9925018 L13.6534091,17 L14.9090909,17 L14.9607367,17.0017785 C15.1115046,17.0121778 15.2551766,17.067876 15.373167,17.1608147 L15.4565541,17.2373754 L17.7974632,19.7373754 L17.8288053,19.7730063 C18.0539391,20.0456617 18.0557142,20.4368446 17.8418783,20.7108072 L17.7626246,20.7974632 L17.7269937,20.8288053 C17.4543383,21.0539391 17.0631554,21.0557142 16.7891928,20.8418783 L16.7025368,20.7626246 L14.58425,18.5 L13.567193,18.4992614 C12.4934607,18.4808506 11.5035477,18.1192079 10.7039791,17.5198057 L11.7813297,16.4440304 Z M20.0009632,9.1313553 C21.762715,9.87025897 23,11.6033984 23,13.625 C23,16.2457463 20.9206452,18.3817094 18.3149199,18.4952526 L18.0965909,18.5 L18,18.5 L17.9559318,18.4987268 C17.56223,18.4759152 17.25,18.1494202 17.25,17.75 C17.25,17.3703042 17.5321539,17.056509 17.8982294,17.0068466 L18,17 L18.1747471,16.999128 C20.0193908,16.9579269 21.5,15.4619321 21.5,13.625 C21.5,12.3860476 20.8264598,11.30219 19.8219676,10.7151816 C19.921098,10.2797857 19.9805168,9.82902884 19.9959563,9.36723755 L20.0009632,9.1313553 Z M12.875,3 C16.2577441,3 19,5.74225591 19,9.125 C19,12.432572 16.3782679,15.1278057 13.0995443,15.2459605 L12.875,15.25 L11.56,15.25 L8.53033009,18.2803301 C8.26406352,18.5465966 7.84739984,18.5708027 7.55378835,18.3529482 L7.46966991,18.2803301 C7.20340335,18.0140635 7.1791973,17.5973998 7.39705176,17.3037883 L7.46966991,17.2196699 L10.7196699,13.9696699 C10.8321917,13.8571481 10.976786,13.7840724 11.1319659,13.7593431 L11.25,13.75 L12.875,13.75 C15.429317,13.75 17.5,11.679317 17.5,9.125 C17.5,6.64163628 15.5427572,4.61541112 13.0867062,4.50475923 L12.875,4.5 L7.125,4.5 C4.57068303,4.5 2.5,6.57068303 2.5,9.125 C2.5,11.6083637 4.45724284,13.6345889 6.91329379,13.7452408 L7.125,13.75 L7.25,13.75 C7.66421356,13.75 8,14.0857864 8,14.5 C8,14.8796958 7.71784612,15.193491 7.35177056,15.2431534 L7.25,15.25 L7.125,15.25 C3.74225591,15.25 1,12.5077441 1,9.125 C1,5.817428 3.62173207,3.12219433 6.90045566,3.00403954 L7.125,3 L12.875,3 Z"></path>'
+    + '</svg>';
+  const jdBtn = document.createElement('button');
+  jdBtn.className = 'gear';
+  jdBtn.type = 'button';
+  jdBtn.title = '查看岗位信息';
+  jdBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">'
+    + '<path d="M15.8722296,1 C17.6173301,1 18.2738114,1.17783521 18.91208,1.51223497 L18.9536914,1.53426541 C19.5745027,1.86627892 20.0680807,2.34610464 20.4148264,2.9541436 L20.4657346,3.04630859 C20.8143488,3.69816044 21,4.34473292 21,6.1277704 L21,17.8722296 L20.9989932,18.0937657 C20.9842401,19.674381 20.8076257,20.3015622 20.487765,20.91208 L20.4657346,20.9536914 C20.1337211,21.5745027 19.6538954,22.0680807 19.0458564,22.4148264 L18.9536914,22.4657346 C18.3018396,22.8143488 17.6552671,23 15.8722296,23 L8.1277704,23 L7.90623426,22.9989932 C6.32561899,22.9842401 5.69843783,22.8076257 5.08791999,22.487765 L5.04630859,22.4657346 C4.42549731,22.1337211 3.93191931,21.6538954 3.58517358,21.0458564 L3.53426541,20.9536914 C3.18565122,20.3018396 3,19.6552671 3,17.8722296 L3,6.1277704 C3,4.38266989 3.17783521,3.72618864 3.51223497,3.08791999 L3.53426541,3.04630859 C3.86627892,2.42549731 4.34610464,1.93191931 4.9541436,1.58517358 L5.04630859,1.53426541 C5.69816044,1.18565122 6.34473292,1 8.1277704,1 L15.8722296,1 Z M16.0753381,2.50070655 L8.02453833,2.50017541 L7.82305804,2.501658 C6.6550816,2.5151767 6.20981608,2.61305534 5.75370688,2.8569852 C5.36325774,3.06579969 5.06579969,3.36325774 4.8569852,3.75370688 C4.59290159,4.24750032 4.5,4.72858421 4.5,6.1277704 L4.50017541,17.9754617 L4.501658,18.176942 C4.5151767,19.3449184 4.61305534,19.7901839 4.8569852,20.2462931 C5.06579969,20.6367423 5.36325774,20.9342003 5.75370688,21.1430148 C6.22281064,21.3938942 6.68044405,21.4902819 7.92466189,21.4992935 L8.1277704,21.5 L15.8722296,21.5 C17.2714158,21.5 17.7524997,21.4070984 18.2462931,21.1430148 C18.6367423,20.9342003 18.9342003,20.6367423 19.1430148,20.2462931 C19.3938942,19.7771894 19.4902819,19.319556 19.4992935,18.0753381 L19.5,17.8722296 L19.5,6.1277704 C19.5,4.72858421 19.4070984,4.24750032 19.1430148,3.75370688 C18.9342003,3.36325774 18.6367423,3.06579969 18.2462931,2.8569852 C17.7771894,2.60610577 17.319556,2.50971811 16.0753381,2.50070655 Z M12,16.25 C12.4142136,16.25 12.75,16.5857864 12.75,17 C12.75,17.4142136 12.4142136,17.75 12,17.75 L7.5,17.75 C7.08578644,17.75 6.75,17.4142136 6.75,17 C6.75,16.5857864 7.08578644,16.25 7.5,16.25 L12,16.25 Z M16.5,11.25 C16.9142136,11.25 17.25,11.5857864 17.25,12 C17.25,12.4142136 16.9142136,12.75 16.5,12.75 L7.5,12.75 C7.08578644,12.75 6.75,12.4142136 6.75,12 C6.75,11.5857864 7.08578644,11.25 7.5,11.25 L16.5,11.25 Z M16.5,6.25 C16.9142136,6.25 17.25,6.58578644 17.25,7 C17.25,7.41421356 16.9142136,7.75 16.5,7.75 L7.5,7.75 C7.08578644,7.75 6.75,7.41421356 6.75,7 C6.75,6.58578644 7.08578644,6.25 7.5,6.25 L16.5,6.25 Z"></path>'
+    + '</svg>';
+  // 三个图标只在同一个按钮里互换，不叠加
+  const icons = { history: historyBtn.innerHTML, notes: jdBtn.innerHTML, back: BACK_ICON };
+  const queryBtn = document.createElement('button');
+  queryBtn.className = 'gear';
+  queryBtn.type = 'button';
+  queryBtn.title = '查询企业年报';
+  queryBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">'
+    + '<path d="M17.6179267,16.3277876 L20.8132621,19.5240485 C21.2037864,19.9145728 21.2037864,20.5477378 20.8132621,20.9382621 C20.4227378,21.3287864 19.7895728,21.3287864 19.3990485,20.9382621 L16.189979,17.729164 C16.7142906,17.3140255 17.1931651,16.8440081 17.6179267,16.3277876 Z M10.375,2 C15.0003848,2 18.75,5.74961522 18.75,10.375 C18.75,12.5107968 17.9505141,14.4598636 16.6344856,15.9392571 L16.8468572,15.6909887 C16.7564149,15.8009681 16.6632239,15.9086017 16.5673893,16.0137845 C16.4969337,16.0911028 16.4254201,16.1667191 16.3525335,16.240983 C16.338412,16.2553719 16.3241207,16.2698289 16.3097773,16.2842339 C16.2403031,16.3540107 16.1694244,16.4227398 16.0973523,16.4902097 C16.0802283,16.506238 16.063454,16.5218113 16.046616,16.5373165 C15.9709789,16.6069739 15.8937108,16.6755519 15.8151858,16.7427027 C15.8023252,16.7537003 15.7894477,16.7646456 15.7765366,16.7755526 L15.7332842,16.8118433 C14.2811297,18.021995 12.4130822,18.75 10.375,18.75 C5.74961522,18.75 2,15.0003848 2,10.375 C2,5.74961522 5.74961522,2 10.375,2 Z M10.375,4 C6.85418472,4 4,6.85418472 4,10.375 C4,13.8958153 6.85418472,16.75 10.375,16.75 C13.8958153,16.75 16.75,13.8958153 16.75,10.375 C16.75,6.85418472 13.8958153,4 10.375,4 Z"></path>'
+    + '</svg>';
+  const gearBtn = document.createElement('button');
+  gearBtn.className = 'gear';
+  gearBtn.type = 'button';
+  gearBtn.title = 'AI 设置';
+  gearBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">'
+    + '<path d="M13.4894964,1.25 C14.1901033,1.25 14.8231865,1.66785112 15.0986042,2.31205231 L15.0986042,2.31205231 L15.92125,4.23625 L16.77175,4.72725 L18.8556101,4.47607817 C19.5285537,4.39491431 20.1856012,4.70961774 20.5451004,5.27951678 L20.5451004,5.27951678 L20.5800481,5.33735213 L22.0680131,7.91013134 C22.4194652,8.51781272 22.3737758,9.27669833 21.9519545,9.83782407 L21.9519545,9.83782407 L20.69375,11.51125 L20.69375,12.4885 L21.9519801,14.16219 C22.3597241,14.70461 22.4160026,15.4318142 22.1018413,16.0285992 L22.1018413,16.0285992 L22.0680196,16.0898574 L20.5800481,18.6626479 C20.2293867,19.2689622 19.5509852,19.6077912 18.8556101,19.5239218 L18.8556101,19.5239218 L16.77175,19.2725 L15.92125,19.7635 L15.0986042,21.6879477 C14.832071,22.3113682 14.2305752,22.7228063 13.5570765,22.748702 L13.5570765,22.748702 L13.4894964,22.75 L10.5105451,22.75 C9.80990141,22.75 9.17679241,22.3321056 8.90139751,21.6878548 L8.90139751,21.6878548 L8.0785,19.7635 L7.228,19.2725 L5.14438986,19.5239218 C4.47144629,19.6050857 3.81439883,19.2903823 3.45489956,18.7204832 L3.45489956,18.7204832 L3.41995189,18.6626479 L1.9319804,16.0898574 C1.58053408,15.482186 1.62621577,14.7233142 2.04801988,14.16219 L2.04801988,14.16219 L3.306,12.4885 L3.306,11.51125 L2.04804545,9.83782407 C1.64028496,9.29540252 1.58399872,8.56818536 1.89816473,7.97139057 L1.89816473,7.97139057 L1.93198692,7.91013134 L3.41995189,5.33735213 C3.77061333,4.73103782 4.44901483,4.39220884 5.14438986,4.47607817 L5.14438986,4.47607817 L7.228,4.72725 L8.0785,4.23625 L8.90139751,2.31214525 C9.1679087,1.68867667 9.7694279,1.27719647 10.4429614,1.25129813 L10.4429614,1.25129813 L10.5105451,1.25 Z M13.4894964,2.75 L10.5105451,2.75 C10.4104531,2.75 10.320009,2.8096992 10.2806668,2.90173504 L10.2806668,2.90173504 L9.42547944,4.90233575 C9.31921851,5.1509195 9.13523096,5.35835416 8.90110986,5.49353025 L8.90110986,5.49353025 L7.90597116,6.06810022 C7.67169142,6.20336791 7.39985123,6.25898058 7.13127161,6.22658714 L7.13127161,6.22658714 L4.96477622,5.96528566 C4.86543693,5.95330433 4.76852243,6.00170847 4.71842794,6.0883248 L4.71842794,6.0883248 L3.23046296,8.66110401 C3.18025552,8.74791564 3.18678258,8.85632787 3.24704275,8.93648869 L3.24704275,8.93648869 L4.55532037,10.6768191 C4.71812619,10.8933908 4.80615731,11.1569971 4.80615595,11.4279382 L4.80615595,11.4279382 L4.80615019,12.5719965 C4.80614882,12.8429255 4.71812287,13.1065199 4.55532821,13.3230849 L4.55532821,13.3230849 L3.24703351,15.0635037 C3.18677578,15.1436643 3.18024983,15.2520745 3.23045644,15.3388847 L3.23045644,15.3388847 L4.71842794,17.9116752 C4.76852243,17.9982915 4.86543693,18.0466957 4.96477622,18.0347143 L4.96477622,18.0347143 L7.13127161,17.7734129 C7.39985123,17.7410194 7.67169142,17.7966321 7.90597116,17.9318998 L7.90597116,17.9318998 L8.90110986,18.5064697 C9.13523096,18.6416458 9.31921851,18.8490805 9.42547944,19.0976643 L9.42547944,19.0976643 L10.2806668,21.098265 C10.320009,21.1903008 10.4104531,21.25 10.5105451,21.25 L10.5105451,21.25 L13.4894964,21.25 C13.5895831,21.25 13.6800236,21.190307 13.7193689,21.0982782 L13.7193689,21.0982782 L14.5747715,19.097494 C14.6810343,18.8489455 14.8650036,18.6415401 15.0990951,18.506376 L15.0990951,18.506376 L16.0940158,17.9319104 C16.3282993,17.7966355 16.6001464,17.7410191 16.8687329,17.7734134 L16.8687329,17.7734134 L19.0352238,18.0347143 C19.1345631,18.0466957 19.2314776,17.9982915 19.2815721,17.9116752 L19.2815721,17.9116752 L20.7695436,15.3388847 C20.8197502,15.2520745 20.8132242,15.1436643 20.7529665,15.0635037 L20.7529665,15.0635037 L19.4446718,13.3230849 C19.2818771,13.1065199 19.1938512,12.8429255 19.1938498,12.5719965 L19.1938498,12.5719965 L19.1938441,11.4279382 C19.1938427,11.1569971 19.2818738,10.8933908 19.4446796,10.6768191 L19.4446796,10.6768191 L20.7529572,8.93648869 C20.8132174,8.85632787 20.8197445,8.74791564 20.769537,8.66110401 L20.769537,8.66110401 L19.2815721,6.0883248 C19.2314776,6.00170847 19.1345631,5.95330433 19.0352238,5.96528566 L19.0352238,5.96528566 L16.8687329,6.2265866 C16.6001464,6.25898087 16.3282993,6.2033645 16.0940158,6.06808955 L16.0940158,6.06808955 L15.0990951,5.49362397 C14.8650036,5.3584599 14.6810343,5.15105452 14.5747715,4.90250599 L14.5747715,4.90250599 L13.7193689,2.90172176 C13.6800236,2.80969302 13.5895831,2.75 13.4894964,2.75 L13.4894964,2.75 Z M12,7.5 C14.4852814,7.5 16.5,9.51471863 16.5,12 C16.5,14.4852814 14.4852814,16.5 12,16.5 C9.51471863,16.5 7.5,14.4852814 7.5,12 C7.5,9.51471863 9.51471863,7.5 12,7.5 Z M12,9 C10.3431458,9 9,10.3431458 9,12 C9,13.6568542 10.3431458,15 12,15 C13.6568542,15 15,13.6568542 15,12 C15,10.3431458 13.6568542,9 12,9 Z"></path>'
+    + '</svg>';
+  const actions = document.createElement('div');
+  actions.className = 'head-actions';
+  actions.append(newChatBtn, historyBtn, jdBtn, queryBtn, gearBtn, closeBtn);
+  head.append(title, actions);
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  const foot = document.createElement('div');
+  foot.className = 'foot';
+  const btnMd = document.createElement('button');
+  btnMd.className = 'act primary';
+  btnMd.type = 'button';
+  btnMd.textContent = '复制 Markdown';
+  const btnJson = document.createElement('button');
+  btnJson.className = 'act';
+  btnJson.type = 'button';
+  btnJson.textContent = '复制 JSON';
+  foot.append(btnMd, btnJson);
+
+  const viewJob = document.createElement('div');
+  viewJob.className = 'view view-job';
+  viewJob.hidden = true;
+  viewJob.append(body, foot);
+
+  const historyView = buildHistoryView();
+
+  const chatView = buildChatView();
+  chatView.view.hidden = false;
+
+  panel.append(head, viewJob, historyView.view, chatView.view);
+
+  const trigger = document.createElement('button');
+  trigger.className = 'trigger';
+  trigger.type = 'button';
+  trigger.textContent = 'AI 岗位助手';
+
+  wrap.append(panel, trigger);
+
+  runtime.ui = {
+    panel, title, body, trigger, jd: jdBtn, btnMd, btnJson,
+    viewJob, viewChat: chatView.view, viewHistory: historyView.view, history: historyBtn, icons,
+    thread: chatView.thread, input: chatView.input, send: chatView.send
+  };
+
+  closeBtn.addEventListener('click', () => { panel.hidden = true; });
+  newChatBtn.addEventListener('click', () => newChat());
+  historyBtn.addEventListener('click', () => {
+    if (!historyView.view.hidden) {
+      switchView('chat');
+      return;
+    }
+    switchView('history');
+    renderHistory(historyView);
+  });
+  trigger.addEventListener('click', onExtract);
+  jdBtn.addEventListener('click', () => switchView(runtime.ui.viewJob.hidden ? 'job' : 'chat'));
+  gearBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: MSG.OPEN_OPTIONS }, () => void chrome.runtime.lastError);
+  });
+  queryBtn.addEventListener('click', () => queryCompany());
+  chatView.send.addEventListener('click', () => {
+    if (runtime.chat.busy) stopChat();
+    else sendChat();
+  });
+  chatView.input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      if (!runtime.chat.busy) sendChat();
+    }
+  });
+  btnMd.addEventListener('click', () => copyCurrent('markdown'));
+  btnJson.addEventListener('click', () => copyCurrent('json'));
+
+  return wrap;
+}
+
+export function mount() {
+  // 扩展热更新后旧节点可能残留，先移除再重建，避免 ui 指向已失效的 DOM
+  const existing = document.getElementById(HOST_ID);
+  if (existing) existing.remove();
+
+  runtime.host = document.createElement('div');
+  runtime.host.id = HOST_ID;
+  runtime.host.style.cssText = 'all: initial';
+
+  const shadow = runtime.host.attachShadow({ mode: 'open' });
+  const style = document.createElement('style');
+  style.textContent = CSS;
+  shadow.appendChild(style);
+  shadow.appendChild(buildUI());
+  runtime.chat.greeted = false;
+  runtime.threadPinned = true;
+
+  // 挂到 documentElement 上，避免被页面框架重渲染 body 时移除
+  document.documentElement.appendChild(runtime.host);
+}
